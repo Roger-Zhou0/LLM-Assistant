@@ -1,0 +1,11 @@
+.env
+__pycache__/
+venv/
+*.pyc
+Backend/.env
+Backend/chat_history/
+Backend/chromadb/
+Backend/memory_store/
+Backend/*.pkl
+Backend/*.db
+Backend/.venv/

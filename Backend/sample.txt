@@ -1,0 +1,1 @@
+Chroma is working perfectly. Testing retrieval and RAG.
