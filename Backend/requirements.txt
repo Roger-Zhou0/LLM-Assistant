@@ -2,13 +2,11 @@ fastapi
 uvicorn
 python-multipart
 pydantic==1.10.13
-sentence-transformers
 openai
 python-dotenv
 PyPDF2
 psycopg2-binary
 sqlalchemy
-chromadb==0.4.24
 python-jose[cryptography]
 passlib
 email-validator

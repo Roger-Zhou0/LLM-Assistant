@@ -10,14 +10,6 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from app.services.memory import MemoryStore
-from app.services.vector_store import get_chroma_client, init_collection
-from app.services.rag import (
-    chunk_text,
-    embed_chunks,
-    embed_query,
-    build_rag_prompt,
-)
 from app.services.auth import get_current_user  # our JWT dependency
 from app.models.user import User                 # SQLAlchemy User model
 from app.services.llm_providers import build_provider
@@ -27,9 +19,33 @@ from app.services.model_registry import (
     lookup_model,
 )
 
+CONTEXT_ENABLED = os.getenv("CONTEXT_ENABLED", "false").lower() == "true"
+
+if CONTEXT_ENABLED:
+    from app.services.memory import MemoryStore
+    from app.services.vector_store import get_chroma_client, init_collection
+    from app.services.rag import (
+        chunk_text,
+        embed_chunks,
+        embed_query,
+        build_rag_prompt,
+    )
+else:
+    class MemoryStore:  # type: ignore[override]
+        pass
+
+    def _disabled(*_args, **_kwargs):
+        raise RuntimeError("Context features are disabled")
+
+    get_chroma_client = _disabled
+    init_collection = _disabled
+    chunk_text = _disabled
+    embed_chunks = _disabled
+    embed_query = _disabled
+    build_rag_prompt = _disabled
+
 router = APIRouter()
 _memory_stores: dict[int, MemoryStore] = {}
-CONTEXT_ENABLED = os.getenv("CONTEXT_ENABLED", "false").lower() == "true"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Per‐user chat_history persistence
@@ -126,6 +142,8 @@ def rag_health(current_user: User = Depends(get_current_user)):
     """
     Verify that the per-user Chroma collection can be opened/created.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="RAG is disabled")
     try:
         collection_name = f"documents_{current_user.id}"
         client = get_chroma_client()
@@ -143,6 +161,8 @@ async def ingest(
     """
     Ingest uploaded files into this user’s Chroma collection.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="RAG is disabled")
     collection_name = f"documents_{current_user.id}"
     all_texts: List[str] = []
     all_ids: List[str] = []
@@ -196,6 +216,8 @@ async def ask(
     3) Call ChatGPT once to get a combined answer.
     4) Return that answer plus the source chunks.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="RAG is disabled")
     collection_name = f"documents_{current_user.id}"
 
     # ─── 1) Time the embedding step ─────────────────────────────────────────────
@@ -276,6 +298,8 @@ MEMORY_DIR = "memory_store"
 os.makedirs(MEMORY_DIR, exist_ok=True)
 
 def get_memory_store(user_id: int) -> MemoryStore:
+    if not CONTEXT_ENABLED:
+        raise RuntimeError("Context features are disabled")
     store = _memory_stores.get(user_id)
     if store is None:
         store = MemoryStore()
@@ -325,6 +349,8 @@ async def ask_memory(
     """
     Retrieve from this user’s MemoryStore and run a memory‐only query.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     # 1) Load this user’s memory from disk into memory_store
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
@@ -359,6 +385,8 @@ async def upload_memory(
     """
     Upload a text or PDF and add to this user’s MemoryStore.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
 
@@ -382,6 +410,8 @@ async def memory_debug(
     """
     Simple HTML preview of the first few memory entries for this user.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
     html = "".join(f"<p>{i+1}. {entry[:300]}...</p>"
@@ -397,6 +427,8 @@ async def get_memory(
     """
     Return a paginated slice of this user’s memories as JSON.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
     preview = store.texts[offset : offset + limit]
@@ -410,6 +442,8 @@ async def remember(
     """
     Add a single text string to this user’s memory.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
     store.add([item.query])
@@ -424,6 +458,8 @@ async def delete_memory(
     """
     Delete a single memory entry by index from this user’s store.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     load_memory_for_user(current_user.id, store)
     try:
@@ -441,6 +477,8 @@ async def clear_memory(
     """
     Clear all memories for this user.
     """
+    if not CONTEXT_ENABLED:
+        raise HTTPException(status_code=503, detail="Memory is disabled")
     store = get_memory_store(current_user.id)
     store.texts.clear()
     store.embeddings.clear()
@@ -490,6 +528,15 @@ def post_message(
     chat_history.append({"role": "user", "content": msg.message})
     persist_chat_history(current_user.id, session_id, chat_history, session_meta)
 
+    # Build conversation context from recent messages (exclude assistant errors)
+    recent_history = [
+        m for m in chat_history[-12:]
+        if isinstance(m, dict) and m.get("role") in {"user", "assistant"}
+    ]
+    conversation_context = "\n".join(
+        f"{m['role'].title()}: {m.get('content', '')}" for m in recent_history
+    )
+
     if CONTEXT_ENABLED:
         # ───────────────────────────
         # 2A) Load this user's MemoryStore from disk
@@ -525,18 +572,22 @@ def post_message(
                 "You are a helpful assistant. Below is some context that has been "
                 "retrieved from the user’s prior “memory” and from uploaded documents:\n\n"
                 f"{combined_context}\n\n"
+                "Conversation so far:\n"
+                f"{conversation_context}\n\n"
                 f"User’s Question: {msg.message}\n"
                 "Assistant’s Answer:"
             )
         else:
             prompt_text = (
                 "You are a helpful assistant. Answer as best you can.\n\n"
+                f"Conversation so far:\n{conversation_context}\n\n"
                 f"User’s Question: {msg.message}\n"
                 "Assistant’s Answer:"
             )
     else:
         prompt_text = (
             "You are a helpful assistant. Answer as best you can.\n\n"
+            f"Conversation so far:\n{conversation_context}\n\n"
             f"User’s Question: {msg.message}\n"
             "Assistant’s Answer:"
         )
