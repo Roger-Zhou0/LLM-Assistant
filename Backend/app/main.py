@@ -20,6 +20,7 @@ app.add_middleware(
         "https://yoshi-frontend.onrender.com",
         "https://llm-assistant1-g5mvbj9f2-roger-zhou0s-projects.vercel.app"
     ],
+    allow_origin_regex=r"https://llm-assistant1-[\\w-]+-roger-zhou0s-projects\\.vercel\\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
