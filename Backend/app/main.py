@@ -18,7 +18,8 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://yoshi-frontend.onrender.com",
-        "https://llm-assistant1-g5mvbj9f2-roger-zhou0s-projects.vercel.app"
+        "https://llm-assistant1-g5mvbj9f2-roger-zhou0s-projects.vercel.app",
+        "https://llm-assistant1.vercel.app"
     ],
     allow_origin_regex=r"https://llm-assistant1-[\\w-]+-roger-zhou0s-projects\\.vercel\\.app",
     allow_credentials=True,
